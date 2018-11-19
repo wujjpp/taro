@@ -26,6 +26,8 @@ const resizeModeMap: Object = {
   scaleToFill: 'stretch',
   aspectFit: 'contain',
   aspectFill: 'cover',
+  center: 'center',
+  // And widthFix
   // Not supported value...
 }
 
@@ -37,8 +39,19 @@ type Props = {
   onLoad?: Function,
 }
 
-class _Image extends React.Component<Props> {
+type State = {
+  // height:width
+  ratio: number,
+  layoutWidth: number
+}
+
+class _Image extends React.Component<Props, State> {
   props: Props
+  hasLayout: boolean = true
+  state: State = {
+    ratio: 0,
+    layoutWidth: 0
+  }
 
   static defaultProps = {
     mode: 'scaleToFill',
@@ -53,10 +66,41 @@ class _Image extends React.Component<Props> {
 
   onLoad = (event: Object) => {
     const { src, onLoad } = this.props
-    const { width, height } = Image.resolveAssetSource(typeof src === 'string' && /^(https?:)?\/\//.test(src) ? { uri: src } : src)
+    // const { width, height } = Image.resolveAssetSource(typeof src === 'string' && /^(https?:)?\/\//.test(src) ? { uri: src } : src)
+    const { width, height } = Image.resolveAssetSource(typeof src === 'string' ? { uri: src } : src)
     onLoad && onLoad({
       detail: { width, height }
     })
+  }
+
+  onLayout = (event: Object) => {
+    const { width: layoutWidth } = event.nativeEvent.layout
+    this.setState({
+      layoutWidth
+    })
+  }
+
+  loadImg = (props: Props) => {
+    const { src } = props
+    if (typeof src === 'string') {
+      Image.getSize(props.src, (width, height) => {
+        this.setState({ ratio: height / width })
+      })
+    } else {
+      const source = Image.resolveAssetSource(props.src)
+      this.setState({
+        ratio: source ? (source.height / source.width) : 0
+      })
+    }
+  }
+
+  // eslint-disable-next-line camelcase
+  UNSAFE_componentWillReceiveProps (nextProps: Props) {
+    this.loadImg(nextProps)
+  }
+
+  componentDidMount () {
+    this.loadImg(this.props)
   }
 
   render () {
@@ -66,10 +110,25 @@ class _Image extends React.Component<Props> {
       mode,
     } = this.props
 
-    // The parameter passed to require must be a string literal
-    src = typeof src === 'string' && /^(https?:)?\/\//.test(src) ? { uri: src } : src
+    const flattenStyle = StyleSheet.flatten(style)
 
-    mode = resizeModeMap[mode] || 'stretch'
+    // The parameter passed to require must be a string literal
+    // src = typeof src === 'string' && /^(https?:)?\/\//.test(src) ? { uri: src } : src
+    src = typeof src === 'string' ? { uri: src } : src
+
+    const isWidthFix = mode === 'widthFix'
+
+    mode = resizeModeMap[mode] || (isWidthFix ? undefined : 'stretch')
+
+    const imageHeight = (() => {
+      if (isWidthFix) {
+        let width = flattenStyle && flattenStyle.width
+        typeof width === 'string' && (width = this.state.layoutWidth)
+        return (width || 300) * this.state.ratio
+      } else {
+        return (flattenStyle && flattenStyle.height) || 225
+      }
+    })()
 
     return (
       <Image
@@ -77,7 +136,16 @@ class _Image extends React.Component<Props> {
         resizeMode={mode}
         onError={this.onError}
         onLoad={this.onLoad}
-        style={[{ width: 300, height: 225 }, style]}
+        onLayout={this.onLayout}
+        style={[
+          {
+            width: 300
+          },
+          style,
+          {
+            height: imageHeight || this.state.imageHeight
+          }
+        ]}
       />
     )
   }

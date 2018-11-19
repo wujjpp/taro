@@ -43,7 +43,8 @@ export const DEFAULT_Component_SET = new Set<string>([
   'FunctionalPageNavigator',
   'Ad',
   'Block',
-  'Import'
+  'Import',
+  'OfficialAccount'
 ])
 
 export const INTERNAL_SAFE_GET = 'internal_safe_get'
@@ -53,6 +54,8 @@ export const TARO_PACKAGE_NAME = '@tarojs/taro'
 export const COMPONENTS_PACKAGE_NAME = '@tarojs/components'
 
 export const REDUX_PACKAGE_NAME = '@tarojs/redux'
+
+export const MOBX_PACKAGE_NAME = '@tarojs/mobx'
 
 export const MAP_CALL_ITERATOR = '__item'
 

@@ -21,6 +21,8 @@ import EXProgress from './example/EXProgress'
 import EXRichText from './example/EXRichText'
 import EXPicker from './example/EXPicker'
 import EXForm from './example/EXForm'
+import EXAudio from './example/EXAudio'
+import EXVideo from './example/EXVideo'
 
 export default class App extends Component {
   state = {
@@ -57,7 +59,16 @@ export default class App extends Component {
     //     />
     //   </TabbarContainer>
     // )
-
+    // for (let key in global) {
+    //   if (global.hasOwnProperty(key)) {
+    //     console.log(key)
+    //   }
+    // }
+    for (let key in global.window) {
+      if (global.window.hasOwnProperty(key)) {
+        console.log(key)
+      }
+    }
     return (
       <ScrollView
         style={{
@@ -80,16 +91,22 @@ export default class App extends Component {
       >
         <Text>Welcome to React Native!</Text>
 
+        <EXVideo />
+
+        <Text numberOfLines={1}>Welcome to React Native!Welcome to React Native!Welcome to React Native!Welcome to React Native!</Text>
+
+        <EXAudio />
+
         <View
           hoverStyle={{ backgroundColor: 'green' }}
           style={{ padding: 50, backgroundColor: 'orange' }}
         >
           <View
             onClick={() => { console.log('you click me') }}
-            onLongPress={() => { console.log('you longpress me') }}
-            onTouchstart={this.onViewTouchstart}
-            onTouchmove={this.onViewTouchmove}
-            onTouchend={this.onViewTouchend}
+            // onLongPress={() => { console.log('you longpress me') }}
+            // onTouchstart={this.onViewTouchstart}
+            // onTouchmove={this.onViewTouchmove}
+            // onTouchend={this.onViewTouchend}
             style={{
               width: 250,
               height: 250,

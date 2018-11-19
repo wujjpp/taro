@@ -7,7 +7,8 @@ import {
   findMethodName,
   pathResolver,
   createRandomLetters,
-  isContainJSXElement
+  isContainJSXElement,
+  getSlotName
 } from './utils'
 import { DEFAULT_Component_SET } from './constant'
 import { kebabCase, uniqueId } from 'lodash'
@@ -132,6 +133,16 @@ class Transformer {
     this.moduleNames = Object.keys(path.scope.getAllBindings('module'))
     this.componentProperies = new Set(componentProperies)
     this.compile()
+  }
+
+  setMultipleSlots () {
+    const body = this.classPath.node.body.body
+    if (body.some(c => t.isClassProperty(c) && c.key.name === 'multipleSlots')) {
+      return
+    }
+    const multipleSlots: any = t.classProperty(t.identifier('multipleSlots'), t.booleanLiteral(true))
+    multipleSlots.static = true
+    body.push(multipleSlots)
   }
 
   createStringRef (componentName: string, id: string, refName: string) {
@@ -333,6 +344,9 @@ class Transformer {
         if (!attr) return
         const key = attr.node.name
         const value = attr.node.value
+        if (!t.isJSXIdentifier(key)) {
+          return
+        }
         if (t.isJSXIdentifier(key) && key.name.startsWith('on') && t.isJSXExpressionContainer(value)) {
           const expr = value.expression
           if (t.isCallExpression(expr) && t.isMemberExpression(expr.callee) && t.isIdentifier(expr.callee.property, { name: 'bind' })) {
@@ -343,6 +357,12 @@ class Transformer {
             throw codeFrameError(expr.loc, '组件事件传参只能在类作用域下的确切引用(this.handleXX || this.props.handleXX)，或使用 bind。')
           }
         }
+        const jsx = path.findParent(p => p.isJSXOpeningElement()) as NodePath<t.JSXOpeningElement>
+        if (!jsx) return
+        const jsxName = jsx.node.name
+        if (!t.isJSXIdentifier(jsxName)) return
+        if (DEFAULT_Component_SET.has(jsxName.name) || expression.isIdentifier() || expression.isMemberExpression() || expression.isLiteral() || expression.isLogicalExpression() || expression.isConditionalExpression() || key.name.startsWith('on') || expression.isCallExpression()) return
+        generateAnonymousState(scope, expression, self.jsxReferencedIdentifiers)
       },
       JSXElement (path) {
         const id = path.node.openingElement.name
@@ -369,7 +389,7 @@ class Transformer {
           }
         }
       },
-      MemberExpression (path) {
+      MemberExpression: (path) => {
         const object = path.get('object')
         const property = path.get('property')
         if (
@@ -387,6 +407,12 @@ class Transformer {
             const name = siblingProp.node.name
             if (name === 'children') {
               parentPath.replaceWith(t.jSXElement(t.jSXOpeningElement(t.jSXIdentifier('slot'), [], true), t.jSXClosingElement(t.jSXIdentifier('slot')), [], true))
+            } else if (/^render[A-Z]/.test(name)) {
+              const slotName = getSlotName(name)
+              parentPath.replaceWith(t.jSXElement(t.jSXOpeningElement(t.jSXIdentifier('slot'), [
+                t.jSXAttribute(t.jSXIdentifier('name'), t.stringLiteral(slotName))
+              ], true), t.jSXClosingElement(t.jSXIdentifier('slot')), []))
+              this.setMultipleSlots()
             } else {
               self.componentProperies.add(siblingProp.node.name)
             }

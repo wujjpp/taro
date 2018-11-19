@@ -20,6 +20,8 @@ const PACKAGES = {
   '@tarojs/taro-h5': '@tarojs/taro-h5',
   '@tarojs/redux': '@tarojs/redux',
   '@tarojs/redux-h5': '@tarojs/redux-h5',
+  '@tarojs/mobx': '@tarojs/mobx',
+  '@tarojs/mobx-h5': '@tarojs/mobx-h5',
   '@tarojs/router': '@tarojs/router',
   '@tarojs/components': '@tarojs/components',
   'nervjs': 'nervjs',
@@ -69,7 +71,7 @@ const FILE_TYPE = {
   NORMAL: 'NORMAL'
 }
 
-const isUnderSubPackages = (parentPath) => (parentPath.isObjectProperty() && /subPackages/i.test(parentPath.node.key.name))
+const isUnderSubPackages = (parentPath) => (parentPath.isObjectProperty() && /subPackages|subpackages/i.test(parentPath.node.key.name))
 
 function processEntry (code, filePath) {
   let ast = wxTransformer({
@@ -77,9 +79,7 @@ function processEntry (code, filePath) {
     sourcePath: filePath,
     isNormal: true,
     isTyped: Util.REG_TYPESCRIPT.test(filePath),
-    env: {
-      TARO_ENV: Util.BUILD_TYPES.H5
-    }
+    adapter: 'h5'
   }).ast
   let taroImportDefaultName
   let providorImportName
@@ -189,7 +189,7 @@ function processEntry (code, filePath) {
 
           /* 插入<Provider /> */
           if (providerComponentName && storeName) {
-            // 使用redux
+            // 使用redux 或 mobx
             funcBody = `
               <${providorImportName} store={${storeName}}>
                 ${funcBody}
@@ -370,6 +370,17 @@ function processEntry (code, filePath) {
             specifiers.push(t.importSpecifier(t.identifier(providerComponentName), t.identifier(providerComponentName)))
           }
           source.value = PACKAGES['@tarojs/redux-h5']
+        } else if (value === PACKAGES['@tarojs/mobx']) {
+          const specifier = specifiers.find(item => {
+            return t.isImportSpecifier(item) && item.imported.name === providerComponentName
+          })
+          if (specifier) {
+            providorImportName = specifier.local.name
+          } else {
+            providorImportName = providerComponentName
+            specifiers.push(t.importSpecifier(t.identifier(providerComponentName), t.identifier(providerComponentName)))
+          }
+          source.value = PACKAGES['@tarojs/mobx-h5']
         }
       }
     },
@@ -475,9 +486,7 @@ function processOthers (code, filePath) {
     sourcePath: filePath,
     isNormal: true,
     isTyped: Util.REG_TYPESCRIPT.test(filePath),
-    env: {
-      TARO_ENV: Util.BUILD_TYPES.H5
-    }
+    adapter: 'h5'
   }).ast
   let taroImportDefaultName
   let hasAddNervJsImportDefaultName = false
@@ -575,6 +584,8 @@ function processOthers (code, filePath) {
           }
         } else if (value === PACKAGES['@tarojs/redux']) {
           source.value = PACKAGES['@tarojs/redux-h5']
+        } else if (value === PACKAGES['@tarojs/mobx']) {
+          source.value = PACKAGES['@tarojs/mobx-h5']
         }
       }
     },

@@ -10,11 +10,18 @@ const t = require('babel-types')
 const generate = require('babel-generator').default
 const template = require('babel-template')
 const autoprefixer = require('autoprefixer')
+const minimatch = require('minimatch')
+const _ = require('lodash')
+
 const postcss = require('postcss')
 const pxtransform = require('postcss-pxtransform')
 const cssUrlParse = require('postcss-url')
-const minimatch = require('minimatch')
-const _ = require('lodash')
+const Scope = require('postcss-modules-scope')
+const Values = require('postcss-modules-values')
+const genericNames = require('generic-names')
+const LocalByDefault = require('postcss-modules-local-by-default')
+const ExtractImports = require('postcss-modules-extract-imports')
+const ResolveImports = require('postcss-modules-resolve-imports')
 
 const Util = require('./util')
 const CONFIG = require('./config')
@@ -81,6 +88,8 @@ const DEVICE_RATIO = 'deviceRatio'
 
 const isWindows = os.platform() === 'win32'
 
+let constantsReplaceList = Object.assign({}, Util.generateEnvList(projectConfig.env || {}), Util.generateConstantsList(projectConfig.defineConstants || {}))
+
 function getExactedNpmFilePath (npmName, filePath) {
   try {
     const npmInfo = resolveNpmFilesPath(npmName, isProduction, weappNpmConfig, buildAdapter)
@@ -91,10 +100,14 @@ function getExactedNpmFilePath (npmName, filePath) {
     } else {
       if (!weappNpmConfig.dir) {
         outputNpmPath = npmInfoMainPath.replace(NODE_MODULES, path.join(outputDirName, weappNpmConfig.name))
+        outputNpmPath = outputNpmPath.replace(/node_modules/g, weappNpmConfig.name)
       } else {
         const npmFilePath = npmInfoMainPath.replace(NODE_MODULES_REG, '')
         outputNpmPath = path.join(path.resolve(configDir, '..', weappNpmConfig.dir), weappNpmConfig.name, npmFilePath)
       }
+    }
+    if (buildAdapter === Util.BUILD_TYPES.ALIPAY) {
+      outputNpmPath = outputNpmPath.replace(/@/, '_')
     }
     const relativePath = path.relative(filePath, outputNpmPath)
     return Util.promoteRelativePath(relativePath)
@@ -111,7 +124,10 @@ function traverseObjectNode (node, obj) {
     const properties = node.value.properties
     obj = {}
     properties.forEach(p => {
-      const key = t.isIdentifier(p.key) ? p.key.name : p.key.value
+      let key = t.isIdentifier(p.key) ? p.key.name : p.key.value
+      if (Util.CONFIG_MAP[buildAdapter][key]) {
+        key = Util.CONFIG_MAP[buildAdapter][key]
+      }
       obj[key] = traverseObjectNode(p.value)
     })
     return obj
@@ -201,7 +217,11 @@ function analyzeImportUrl ({ astPath, value, depComponents, sourceFilePath, file
         }
 
         if (defaultSpecifier) {
-          astPath.replaceWith(t.variableDeclaration('const', [t.variableDeclarator(t.identifier(defaultSpecifier), t.stringLiteral(vpath.replace(sourceDirPath, '').replace(/\\/g, '/')))]))
+          if (buildAdapter === Util.BUILD_TYPES.SWAN) {
+            astPath.replaceWith(t.variableDeclaration('const', [t.variableDeclarator(t.identifier(defaultSpecifier), t.stringLiteral(Util.promoteRelativePath(path.relative(sourceFilePath, vpath)).replace(/\\/g, '/')))]))
+          } else {
+            astPath.replaceWith(t.variableDeclaration('const', [t.variableDeclarator(t.identifier(defaultSpecifier), t.stringLiteral(vpath.replace(sourceDirPath, '').replace(/\\/g, '/')))]))
+          }
         } else {
           astPath.remove()
         }
@@ -258,9 +278,6 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
   let taroImportDefaultName
   let needExportDefault = false
   let exportTaroReduxConnected = null
-  const constantsReplaceList = Object.assign({
-    'process.env.TARO_ENV': buildAdapter
-  }, Util.generateEnvList(projectConfig.env || {}), Util.generateConstantsList(projectConfig.defineConstants || {}))
   ast = babel.transformFromAst(ast, '', {
     plugins: [
       [require('babel-plugin-danger-remove-unused-import'), { ignore: ['@tarojs/taro', 'react', 'nervjs'] }],
@@ -359,6 +376,7 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
       const node = astPath.node
       const source = node.source
       let value = source.value
+      const specifiers = node.specifiers
       if (Util.isNpmPkg(value) && notExistNpmList.indexOf(value) < 0) {
         if (value === taroJsComponents) {
           astPath.remove()
@@ -402,6 +420,42 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
               source.value = value
             }
           }
+        }
+      } else if (Util.CSS_EXT.indexOf(path.extname(value)) !== -1 && specifiers.length > 0) { // 对 使用 import style from './style.css' 语法引入的做转化处理
+        Util.printLog(Util.pocessTypeEnum.GENERATE, '替换代码', `为文件 ${sourceFilePath} 生成 css modules`)
+        const styleFilePath = path.join(path.dirname(sourceFilePath), value)
+        const styleCode = fs.readFileSync(styleFilePath).toString()
+        const result = processStyleUseCssModule({
+          css: styleCode,
+          filePath: styleFilePath
+        })
+        const tokens = result.root.exports || {}
+        const objectPropperties = []
+        for (const key in tokens) {
+          if (tokens.hasOwnProperty(key)) {
+            objectPropperties.push(t.objectProperty(t.identifier(key), t.stringLiteral(tokens[key])))
+          }
+        }
+        let defaultDeclator = null
+        let normalDeclator = null
+        let importItems = []
+        specifiers.forEach(s => {
+          if (t.isImportDefaultSpecifier(s)) {
+            defaultDeclator = [t.variableDeclarator(t.identifier(s.local.name), t.objectExpression(objectPropperties))]
+          } else {
+            importItems.push(t.objectProperty(t.identifier(s.local.name), t.identifier(s.local.name)))
+          }
+        })
+        normalDeclator = [t.variableDeclarator(t.objectPattern(importItems), t.objectExpression(objectPropperties))]
+        if (defaultDeclator) {
+          astPath.insertBefore(t.variableDeclaration('const', defaultDeclator))
+        }
+        if (normalDeclator) {
+          astPath.insertBefore(t.variableDeclaration('const', normalDeclator))
+        }
+        astPath.remove()
+        if (styleFiles.indexOf(styleFilePath) < 0) { // add this css file to queue
+          styleFiles.push(styleFilePath)
         }
       } else if (path.isAbsolute(value)) {
         Util.printLog(Util.pocessTypeEnum.ERROR, '引用文件', `文件 ${sourceFilePath} 中引用 ${value} 是绝对路径！`)
@@ -465,8 +519,26 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
               }
             }
           }
-        }
-        if (path.isAbsolute(value)) {
+        } else if (Util.CSS_EXT.indexOf(path.extname(value)) !== -1 && t.isVariableDeclarator(astPath.parentPath)) { // 对 使用 const style = require('./style.css') 语法引入的做转化处理
+          Util.printLog(Util.pocessTypeEnum.GENERATE, '替换代码', `为文件 ${sourceFilePath} 生成 css modules`)
+          const styleFilePath = path.join(path.dirname(sourceFilePath), value)
+          const styleCode = fs.readFileSync(styleFilePath).toString()
+          const result = processStyleUseCssModule({
+            css: styleCode,
+            filePath: styleFilePath
+          })
+          const tokens = result.root.exports || {}
+          const objectPropperties = []
+          for (const key in tokens) {
+            if (tokens.hasOwnProperty(key)) {
+              objectPropperties.push(t.objectProperty(t.identifier(key), t.stringLiteral(tokens[key])))
+            }
+          }
+          astPath.replaceWith(t.objectExpression(objectPropperties))
+          if (styleFiles.indexOf(styleFilePath) < 0) { // add this css file to queue
+            styleFiles.push(styleFilePath)
+          }
+        } else if (path.isAbsolute(value)) {
           Util.printLog(Util.pocessTypeEnum.ERROR, '引用文件', `文件 ${sourceFilePath} 中引用 ${value} 是绝对路径！`)
         }
       }
@@ -611,7 +683,11 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
                     if (NODE_MODULES_REG.test(vpath)) {
                       sourceDirPath = nodeModulesPath
                     }
-                    astPath.replaceWith(t.stringLiteral(vpath.replace(sourceDirPath, '').replace(/\\/g, '/')))
+                    if (buildAdapter === Util.BUILD_TYPES.SWAN) {
+                      astPath.replaceWith(t.stringLiteral(Util.promoteRelativePath(path.relative(sourceFilePath, vpath)).replace(/\\/g, '/')))
+                    } else {
+                      astPath.replaceWith(t.stringLiteral(vpath.replace(sourceDirPath, '').replace(/\\/g, '/')))
+                    }
                   } else {
                     let vpath = Util.resolveScriptPath(path.resolve(sourceFilePath, '..', value))
                     let outputVpath
@@ -696,9 +772,6 @@ function parseAst (type, ast, depComponents, sourceFilePath, filePath, npmSkip =
 function parseComponentExportAst (ast, componentName, componentPath, componentType) {
   let componentRealPath = null
   let importExportName
-  const constantsReplaceList = Object.assign({
-    'process.env.TARO_ENV': buildAdapter
-  }, Util.generateEnvList(projectConfig.env || {}), Util.generateConstantsList(projectConfig.defineConstants || {}))
   ast = babel.transformFromAst(ast, '', {
     plugins: [
       [require('babel-plugin-transform-define').default, constantsReplaceList]
@@ -773,7 +846,8 @@ function isFileToBeTaroComponent (code, sourcePath, outputPath) {
     outputPath: outputPath,
     isNormal: true,
     isTyped: Util.REG_TYPESCRIPT.test(sourcePath),
-    adapter: buildAdapter
+    adapter: buildAdapter,
+    env: constantsReplaceList
   })
   const { ast } = transformResult
   let isTaroComponent = false
@@ -879,40 +953,28 @@ async function compileScriptFile (content, sourceFilePath, outputFilePath, adapt
     outputPath: outputFilePath,
     isNormal: true,
     isTyped: false,
-    adapter
+    adapter,
+    env: constantsReplaceList
   })
   const res = parseAst(PARSE_AST_TYPE.NORMAL, transformResult.ast, [], sourceFilePath, outputFilePath)
   return res.code
 }
 
 function buildProjectConfig () {
-  let projectConfigFileName = ''
+  let projectConfigFileName = `project.${buildAdapter}.json`
   if (buildAdapter === Util.BUILD_TYPES.WEAPP) {
     projectConfigFileName = 'project.config.json'
-    const projectConfigPath = path.join(appPath, projectConfigFileName)
-    if (!fs.existsSync(projectConfigPath)) {
-      return
-    }
-    const origProjectConfig = fs.readJSONSync(projectConfigPath)
-    fs.ensureDirSync(outputDir)
-    fs.writeFileSync(
-      path.join(outputDir, projectConfigFileName),
-      JSON.stringify(Object.assign({}, origProjectConfig, { miniprogramRoot: './' }), null, 2)
-    )
-  } else if (buildAdapter === Util.BUILD_TYPES.SWAN) {
-    projectConfigFileName = 'project.swan.json'
-    const projectConfigObj = {
-      appid: 'testappid',
-      setting: {
-        urlCheck: false
-      }
-    }
-    fs.ensureDirSync(outputDir)
-    fs.writeFileSync(
-      path.join(outputDir, projectConfigFileName),
-      JSON.stringify(projectConfigObj, null, 2)
-    )
   }
+  let projectConfigPath = path.join(appPath, projectConfigFileName)
+
+  if (!fs.existsSync(projectConfigPath)) return
+
+  const origProjectConfig = fs.readJSONSync(projectConfigPath)
+  fs.ensureDirSync(outputDir)
+  fs.writeFileSync(
+    path.join(outputDir, projectConfigFileName),
+    JSON.stringify(Object.assign({}, origProjectConfig, { miniprogramRoot: './' }), null, 2)
+  )
   Util.printLog(Util.pocessTypeEnum.GENERATE, '工具配置', `${outputDirName}/${projectConfigFileName}`)
 }
 
@@ -960,7 +1022,8 @@ async function buildEntry () {
       outputPath: outputEntryFilePath,
       isApp: true,
       isTyped: Util.REG_TYPESCRIPT.test(entryFilePath),
-      adapter: buildAdapter
+      adapter: buildAdapter,
+      env: constantsReplaceList
     })
     // app.js的template忽略
     const res = parseAst(PARSE_AST_TYPE.ENTRY, transformResult.ast, [], entryFilePath, outputEntryFilePath)
@@ -1040,7 +1103,7 @@ async function buildPages () {
   Util.printLog(Util.pocessTypeEnum.COMPILE, '所有页面')
   // 支持分包，解析子包页面
   const pages = appConfig.pages || []
-  const subPackages = appConfig.subPackages
+  const subPackages = appConfig.subPackages || appConfig.subpackages
   if (subPackages && subPackages.length) {
     subPackages.forEach(item => {
       if (item.pages && item.pages.length) {
@@ -1174,7 +1237,8 @@ async function buildSinglePage (page) {
       outputPath: outputPageJSPath,
       isRoot: true,
       isTyped: Util.REG_TYPESCRIPT.test(pageJs),
-      adapter: buildAdapter
+      adapter: buildAdapter,
+      env: constantsReplaceList
     })
     const pageDepComponents = transformResult.components
     const res = parseAst(PARSE_AST_TYPE.PAGE, transformResult.ast, pageDepComponents, pageJs, outputPageJSPath)
@@ -1281,17 +1345,114 @@ async function buildSinglePage (page) {
   }
 }
 
-async function processStyleWithPostCSS (styleObj) {
-  let configs = weappConf.module.postcss
-  let moduleNames = _.keys(configs)
-  const processors = _.map(moduleNames, name => {
-    let config = configs[name]
-    if (_.indexOf(name, '.') === 0) { // local plugin
-      name = path.join(appPath, name)
+/**
+ * css module processor
+ * @param styleObj { css: string, filePath: '' }
+ * @returns postcss.process()
+ */
+function processStyleUseCssModule (styleObj) {
+  // 对 xxx.global.[css|scss|less|styl] 等样式文件不做处理
+  const DO_NOT_USE_CSS_MODULE = '.global'
+  if (styleObj.filePath.indexOf(DO_NOT_USE_CSS_MODULE) > -1) return styleObj
+  const useModuleConf = weappConf.module || {}
+  const customPostcssConf = useModuleConf.postcss || {}
+  const customCssModulesConf = Object.assign({
+    enable: false,
+    config: {
+      generateScopedName: '[name]__[local]___[hash:base64:5]'
     }
-    return require(name)(config)
+  }, customPostcssConf.cssModules || {})
+  if (!customCssModulesConf.enable) {
+    return styleObj
+  }
+  const generateScopedName = customCssModulesConf.generateScopedName
+  const context = process.cwd()
+  let scopedName
+  if (generateScopedName) {
+    scopedName = genericNames(generateScopedName, { context })
+  } else {
+    scopedName = (local, filename) => Scope.generateScopedName(local, path.relative(context, filename))
+  }
+  const postcssPlugins = [
+    Values,
+    LocalByDefault,
+    ExtractImports,
+    new Scope({ generateScopedName: scopedName }),
+    new ResolveImports({ resolve: Object.assign({}, { extensions: Util.CSS_EXT }) })
+  ]
+  const runner = postcss(postcssPlugins)
+  const result = runner.process(styleObj.css, Object.assign({}, { from: styleObj.filePath }))
+  return result
+}
+
+async function processStyleWithPostCSS (styleObj) {
+  const useModuleConf = weappConf.module || {}
+  const customPostcssConf = useModuleConf.postcss || {}
+  const customCssModulesConf = Object.assign({
+    enable: false,
+    config: {
+      generateScopedName: '[name]__[local]___[hash:base64:5]'
+    }
+  }, customPostcssConf.cssModules || {})
+  const customPxtransformConf = Object.assign({
+    enable: true,
+    config: {}
+  }, customPostcssConf.pxtransform || {})
+  const customUrlConf = Object.assign({
+    enable: true,
+    config: {
+      limit: 10240
+    }
+  }, customPostcssConf.url || {})
+  const customAutoprefixerConf = Object.assign({
+    enable: true,
+    config: {
+      browsers: browserList
+    }
+  }, customPostcssConf.autoprefixer || {})
+  const postcssPxtransformOption = {
+    designWidth: projectConfig.designWidth || 750,
+    platform: 'weapp'
+  }
+
+  if (projectConfig.hasOwnProperty(DEVICE_RATIO)) {
+    postcssPxtransformOption[DEVICE_RATIO] = projectConfig.deviceRatio
+  }
+  const cssUrlConf = Object.assign({ limit: 10240 }, customUrlConf)
+  const maxSize = Math.round((customUrlConf.config.limit || cssUrlConf.limit) / 1024)
+  const postcssPxtransformConf = Object.assign({}, postcssPxtransformOption, customPxtransformConf, customPxtransformConf.config)
+  const processors = []
+  if (customAutoprefixerConf.enable) {
+    processors.push(autoprefixer(customAutoprefixerConf.config))
+  }
+  if (customPxtransformConf.enable) {
+    processors.push(pxtransform(postcssPxtransformConf))
+  }
+  if (cssUrlConf.enable) {
+    processors.push(cssUrlParse({
+      url: 'inline',
+      maxSize,
+      encodeType: 'base64'
+    }))
+  }
+
+  const defaultPostCSSPluginNames = ['autoprefixer', 'pxtransform', 'url', 'cssModules']
+  Object.keys(customPostcssConf).forEach(pluginName => {
+    if (defaultPostCSSPluginNames.indexOf(pluginName) < 0) {
+      const pluginConf = customPostcssConf[pluginName]
+      if (pluginConf && pluginConf.enable) {
+        if (!Util.isNpmPkg(pluginName)) { // local plugin
+          pluginName = path.join(appPath, pluginName)
+        }
+        processors.push(require(resolveNpmPkgMainPath(pluginName, isProduction, weappNpmConfig, buildAdapter))(pluginConf.config || {}))
+      }
+    }
   })
-  const postcssResult = await postcss(processors).process(styleObj.css, {
+  let css = styleObj.css
+  if (customCssModulesConf.enable) {
+    css = processStyleUseCssModule(styleObj).css
+  }
+  const postcssResult = await postcss(processors).process(css, {
     from: styleObj.filePath
   })
   return postcssResult.css
@@ -1478,7 +1639,8 @@ async function buildSingleComponent (componentObj, buildConfig = {}) {
       isRoot: false,
       isTyped: Util.REG_TYPESCRIPT.test(component),
       isNormal: false,
-      adapter: buildAdapter
+      adapter: buildAdapter,
+      env: constantsReplaceList
     })
     const componentDepComponents = transformResult.components
     const res = parseAst(PARSE_AST_TYPE.COMPONENT, transformResult.ast, componentDepComponents, component, outputComponentJSPath, buildConfig.npmSkip)
@@ -1624,7 +1786,8 @@ function compileDepScripts (scriptFiles) {
             outputPath: outputItem,
             isNormal: true,
             isTyped: Util.REG_TYPESCRIPT.test(item),
-            adapter: buildAdapter
+            adapter: buildAdapter,
+            env: constantsReplaceList
           })
           const ast = transformResult.ast
           const res = parseAst(PARSE_AST_TYPE.NORMAL, ast, [], item, outputItem)
@@ -1745,7 +1908,7 @@ function watchFiles () {
           const config = await buildEntry()
           // TODO 此处待优化
           if ((Util.checksum(JSON.stringify(config.pages)) !== Util.checksum(JSON.stringify(appConfig.pages))) ||
-            (Util.checksum(JSON.stringify(config.subPackages || {})) !== Util.checksum(JSON.stringify(appConfig.subPackages || {})))) {
+            (Util.checksum(JSON.stringify(config.subPackages || config.subpackages || {})) !== Util.checksum(JSON.stringify(appConfig.subPackages || appConfig.subpackages || {})))) {
             appConfig = config
             await buildPages()
           }
@@ -1875,6 +2038,9 @@ async function build ({ watch, adapter }) {
   isProduction = !watch
   buildAdapter = adapter
   outputFilesTypes = Util.MINI_APP_FILES[buildAdapter]
+  constantsReplaceList = Object.assign({}, constantsReplaceList, {
+    'process.env.TARO_ENV': buildAdapter
+  })
   buildProjectConfig()
   copyFiles()
   appConfig = await buildEntry()
