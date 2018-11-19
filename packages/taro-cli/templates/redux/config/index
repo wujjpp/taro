@@ -2,6 +2,11 @@ const config = {
   projectName: '<%= projectName %>',
   date: '<%= date %>',
   designWidth: 750,
+  deviceRatio: {
+    '640': 2.34 / 2,
+    '750': 1,
+    '828': 1.81 / 2
+  },
   sourceRoot: 'src',
   outputRoot: 'dist',
   plugins: {
@@ -19,25 +24,36 @@ const config = {
   },
   defineConstants: {
   },
+  copy: {
+    patterns: [
+    ],
+    options: {
+    }
+  },
   weapp: {
     module: {
       postcss: {
         autoprefixer: {
-          browsers: [
-            'last 3 versions',
-            'Android >= 4.1',
-            'ios >= 8'
-          ]
+          enable: true,
+          config: {
+            browsers: [
+              'last 3 versions',
+              'Android >= 4.1',
+              'ios >= 8'
+            ]
+          }
         },
-        'postcss-pxtransform': {
-          designWidth: 750,
-          platform: 'weapp',
-          deviceRatio: { '640': 1.17, '750': 1, '828': 0.905 }
-        }
-        'postcss-url': {
-          url: 'inline',
-          limit: 10240,
-          encodeType: 'base64'
+        pxtransform: {
+          enable: true,
+          config: {
+
+          }
+        },
+        url: {
+          enable: true,
+          config: {
+            limit: 10240 // 设定转换尺寸上限
+          }
         }
       }
     }

@@ -25,8 +25,8 @@ const RequestQueue = {
     if (this.queue.length <= this.MAX_REQUEST) {
       let options = this.queue.shift()
       let completeFn = options.complete
-      options.complete = () => {
-        completeFn && completeFn.apply(options, [...arguments])
+      options.complete = (...args) => {
+        completeFn && completeFn.apply(options, args)
         this.run()
       }
       wx.request(options)
@@ -138,12 +138,16 @@ function processApis (taro) {
         })
         if (key === 'uploadFile' || key === 'downloadFile') {
           p.progress = cb => {
-            task.onProgressUpdate(cb)
+            if (task) {
+              task.onProgressUpdate(cb)
+            }
             return p
           }
           p.abort = cb => {
             cb && cb()
-            task.abort()
+            if (task) {
+              task.abort()
+            }
             return p
           }
         }

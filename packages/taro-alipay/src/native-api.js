@@ -6,18 +6,6 @@ import {
 } from '@tarojs/taro'
 
 const apiDiff = {
-  showModal: {
-    alias: 'confirm',
-    options: {
-      change: [{
-        old: 'cancelText',
-        new: 'cancelButtonText'
-      }, {
-        old: 'confirmText',
-        new: 'confirmButtonText'
-      }]
-    }
-  },
   showActionSheet: {
     options: {
       change: [{
@@ -241,29 +229,33 @@ function processApis (taro) {
     if (!onAndSyncApis[key] && !noPromiseApis[key]) {
       taro[key] = (options, ...args) => {
         const result = generateSpecialApis(key, options || {})
-        key = result.api
+        const newKey = result.api
         options = result.options
         let task = null
         let obj = Object.assign({}, options)
+        if (!(newKey in my)) {
+          console.warn(`支付宝小程序暂不支持 ${newKey}`)
+          return
+        }
         if (typeof options === 'string') {
           if (args.length) {
-            return my[key](options, ...args)
+            return my[newKey](options, ...args)
           }
-          return my[key](options)
+          return my[newKey](options)
         }
         const p = new Promise((resolve, reject) => {
           ['fail', 'success', 'complete'].forEach((k) => {
             obj[k] = (res) => {
               if (k === 'success') {
-                if (key === 'saveFile') {
+                if (newKey === 'saveFile') {
                   res.savedFilePath = res.apFilePath
-                } else if (key === 'downloadFile') {
+                } else if (newKey === 'downloadFile') {
                   res.tempFilePath = res.apFilePath
-                } else if (key === 'chooseImage') {
+                } else if (newKey === 'chooseImage') {
                   res.tempFilePaths = res.apFilePaths
-                } else if (key === 'getClipboard') {
+                } else if (newKey === 'getClipboard') {
                   res.data = res.text
-                } else if (key === 'scan') {
+                } else if (newKey === 'scan') {
                   res.result = res.code
                 }
               }
@@ -276,19 +268,23 @@ function processApis (taro) {
             }
           })
           if (args.length) {
-            task = my[key](obj, ...args)
+            task = my[newKey](obj, ...args)
           } else {
-            task = my[key](obj)
+            task = my[newKey](obj)
           }
         })
-        if (key === 'uploadFile' || key === 'downloadFile') {
+        if (newKey === 'uploadFile' || newKey === 'downloadFile') {
           p.progress = cb => {
-            task.onProgressUpdate(cb)
+            if (task) {
+              task.onProgressUpdate(cb)
+            }
             return p
           }
           p.abort = cb => {
             cb && cb()
-            task.abort()
+            if (task) {
+              task.abort()
+            }
             return p
           }
         }
@@ -296,6 +292,28 @@ function processApis (taro) {
       }
     } else {
       taro[key] = (...args) => {
+        if (!(key in my)) {
+          console.warn(`支付宝小程序暂不支持 ${key}`)
+          return
+        }
+        if (key === 'getStorageSync') {
+          const arg1 = args[0]
+          if (arg1 != null) {
+            return my[key].call(my, { key: arg1 }).data || ''
+          }
+          return console.log('getStorageSync 传入参数错误')
+        }
+        if (key === 'setStorageSync') {
+          const arg1 = args[0]
+          const arg2 = args[1]
+          if (arg1 != null) {
+            return my[key].call(my, {
+              key: arg1,
+              data: arg2
+            })
+          }
+          return console.log('setStorageSync 传入参数错误')
+        }
         return my[key].apply(my, args)
       }
     }
@@ -313,28 +331,38 @@ function pxTransform (size) {
 
 function generateSpecialApis (api, options) {
   let apiAlias = api
-  Object.keys(apiDiff).forEach(item => {
-    const apiItem = apiDiff[item]
-    if (api === item) {
-      if (apiItem.alias) {
-        apiAlias = apiItem.alias
-      }
-      if (apiItem.options) {
-        const change = apiItem.options.change
-        const set = apiItem.options.set
-        if (change) {
-          change.forEach(changeItem => {
-            options[changeItem.new] = options[changeItem.old]
-          })
-        }
-        if (set) {
-          set.forEach(setItem => {
-            options[setItem.key] = typeof setItem.value === 'function' ? setItem.value(options) : setItem.value
-          })
-        }
-      }
+  if (api === 'showModal') {
+    options.cancelButtonText = options.cancelText
+    options.confirmButtonText = options.confirmText || '确定'
+    apiAlias = 'confirm'
+    if (options.showCancel === false) {
+      options.buttonText = options.confirmText || '确定'
+      apiAlias = 'alert'
     }
-  })
+  } else {
+    Object.keys(apiDiff).forEach(item => {
+      const apiItem = apiDiff[item]
+      if (api === item) {
+        if (apiItem.alias) {
+          apiAlias = apiItem.alias
+        }
+        if (apiItem.options) {
+          const change = apiItem.options.change
+          const set = apiItem.options.set
+          if (change) {
+            change.forEach(changeItem => {
+              options[changeItem.new] = options[changeItem.old]
+            })
+          }
+          if (set) {
+            set.forEach(setItem => {
+              options[setItem.key] = typeof setItem.value === 'function' ? setItem.value(options) : setItem.value
+            })
+          }
+        }
+      }
+    })
+  }
 
   return {
     api: apiAlias,

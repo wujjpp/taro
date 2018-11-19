@@ -19,9 +19,10 @@ import {
   findMethodName,
   isVarName,
   setParentCondition,
-  isContainJSXElement
+  isContainJSXElement,
+  getSlotName
 } from './utils'
-import { difference, get as safeGet } from 'lodash'
+import { difference, get as safeGet, cloneDeep } from 'lodash'
 import {
   setJSXAttr,
   buildBlockElement,
@@ -639,6 +640,10 @@ export class RenderParser {
                 if (t.isIdentifier(node) && path.scope.hasBinding(argName)) {
                   this.addRefIdentifier(path, node as t.Identifier)
                   expr = t.jSXExpressionContainer(node)
+                } else if (t.isMemberExpression(node)) {
+                  const id = findFirstIdentifierFromMemberExpression(node)
+                  this.addRefIdentifier(path, id)
+                  expr = t.jSXExpressionContainer(node)
                 } else if (node.type === 'NumericLiteral' || t.isStringLiteral(node) || t.isBooleanLiteral(node) || t.isNullLiteral(node)) {
                   expr = t.jSXExpressionContainer(node as any)
                 } else if (hasComplexExpression(arg)) {
@@ -757,6 +762,19 @@ export class RenderParser {
           // transformName = eventShouldBeCatched
           //   ? CATCH_EVENT_MAP.get(name.name)!
           //   : BIND_EVENT_MAP.get(name.name)!
+        } else if (/^render[A-Z]/.test(name.name) && !DEFAULT_Component_SET.has(componentName)) {
+          if (!t.isJSXExpressionContainer(value)) {
+            throw codeFrameError(value, '以 render 开头的 props 只能传入包含一个 JSX 元素的 JSX 表达式。')
+          }
+          const expression = value.expression
+          if (!t.isJSXElement(expression)) {
+            throw codeFrameError(value, '以 render 开头的 props 只能传入包含一个 JSX 元素的 JSX 表达式。')
+          }
+          const slotName = getSlotName(name.name)
+          const slot = cloneDeep(expression)
+          setJSXAttr(slot, 'slot', t.stringLiteral(slotName))
+          jsxElementPath.node.children.push(slot)
+          path.remove()
         }
       }
     },
@@ -968,6 +986,9 @@ export class RenderParser {
     const loopArrayId = incrementId()
     const replaceQueue: Function[] = []
     this.loopComponents.forEach((component, callee) => {
+      if (!callee.isCallExpression()) {
+        return
+      }
       for (const dcl of this.jsxDeclarations) {
         const isChildren = dcl && dcl.findParent(d => d === callee)
         if (isChildren) {
@@ -1069,6 +1090,19 @@ export class RenderParser {
                 replaceOriginal(path, parent, name)
               }
 
+            },
+            MemberExpression (path) {
+              const { object, property } = path.node
+              if (t.isThisExpression(object) && t.isIdentifier(property, { name: 'state' })) {
+                if (path.parentPath.isMemberExpression() && path.parentPath.parentPath.isMemberExpression()) {
+                  // tslint:disable-next-line
+                  console.warn(
+                    codeFrameError(path.parentPath.parentPath.node,
+                      `在循环中使用 this.state.xx.xx 可能会存在问题，请给 xx 起一个别名，例如 const { xx } = this.state`
+                    )
+                  )
+                }
+              }
             }
           })
           const originalProp = t.objectProperty(

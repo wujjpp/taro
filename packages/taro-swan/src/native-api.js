@@ -65,6 +65,12 @@ function request (options) {
 function processApis (taro) {
   const weApis = Object.assign({ }, onAndSyncApis, noPromiseApis, otherApis)
   Object.keys(weApis).forEach(key => {
+    if (!(key in swan)) {
+      taro[key] = () => {
+        console.warn(`百度小程序暂不支持 ${key}`)
+      }
+      return
+    }
     if (!onAndSyncApis[key] && !noPromiseApis[key]) {
       taro[key] = (options, ...args) => {
         options = options || {}
@@ -105,12 +111,16 @@ function processApis (taro) {
         })
         if (key === 'uploadFile' || key === 'downloadFile') {
           p.progress = cb => {
-            task.onProgressUpdate(cb)
+            if (task) {
+              task.onProgressUpdate(cb)
+            }
             return p
           }
           p.abort = cb => {
             cb && cb()
-            task.abort()
+            if (task) {
+              task.abort()
+            }
             return p
           }
         }

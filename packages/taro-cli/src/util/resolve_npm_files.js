@@ -152,20 +152,26 @@ function recursiveRequire (filePath, files, isProduction, npmConfig = {}, buildA
     const npmFilePath = filePath.replace(/(.*)node_modules/, '')
     outputNpmPath = path.join(path.resolve(configDir, '..', npmConfig.dir), npmConfig.name, npmFilePath)
   }
+  if (buildAdapter === BUILD_TYPES.ALIPAY) {
+    outputNpmPath = outputNpmPath.replace(/@/, '_')
+  }
   if (REG_STYLE.test(path.basename(filePath))) {
     return
   }
   fileContent = npmCodeHack(filePath, fileContent, buildAdapter)
   try {
+    const constantsReplaceList = Object.assign({
+      'process.env.TARO_ENV': buildAdapter
+    }, generateEnvList(projectConfig.env || {}))
     const transformResult = wxTransformer({
       code: fileContent,
       sourcePath: filePath,
       outputPath: outputNpmPath,
       isNormal: true,
       adapter: buildAdapter,
-      isTyped: REG_TYPESCRIPT.test(filePath)
+      isTyped: REG_TYPESCRIPT.test(filePath),
+      env: constantsReplaceList
     })
-    const constantsReplaceList = generateEnvList(projectConfig.env || {})
     const ast = babel.transformFromAst(transformResult.ast, '', {
       plugins: [
         [require('babel-plugin-transform-define').default, constantsReplaceList]
@@ -204,11 +210,18 @@ function npmCodeHack (filePath, content, buildAdapter) {
     case 'lodash.js':
     case '_global.js':
     case 'lodash.min.js':
-      if (buildAdapter === BUILD_TYPES.ALIPAY) {
+      if (buildAdapter === BUILD_TYPES.ALIPAY || buildAdapter === BUILD_TYPES.SWAN) {
         content = content.replace(/Function\([\'"]return this[\'"]\)\(\)/, '{}')
       } else {
         content = content.replace(/Function\([\'"]return this[\'"]\)\(\)/, 'this')
       }
+      break
+    case 'mobx.js':
+      //解决支付宝小程序全局window或global不存在的问题
+      content = content.replace(
+        /typeof window\s{0,}!==\s{0,}[\'"]undefined[\'"]\s{0,}\?\s{0,}window\s{0,}:\s{0,}global/,
+        'typeof window !== "undefined" ? window : typeof global !== "undefined" ? global : {}'
+      )
       break
     case '_html.js':
       content = 'module.exports = false;'
@@ -219,7 +232,11 @@ function npmCodeHack (filePath, content, buildAdapter) {
       content = content.replace('Promise && Promise.resolve', 'false && Promise && Promise.resolve')
       break
     case '_freeGlobal.js':
-      content = content.replace('module.exports = freeGlobal;', 'module.exports = freeGlobal || this || {};')
+      content = content.replace('module.exports = freeGlobal;', 'module.exports = freeGlobal || this || global || {};')
+      break
+  }
+  if (buildAdapter === BUILD_TYPES.ALIPAY && content.replace(/\s\r\n/g, '').length <= 0) {
+    content = '// Empty file'
   }
   return content
 }

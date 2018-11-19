@@ -7,7 +7,7 @@ import * as ts from 'typescript'
 import { Transformer } from './class'
 import { setting, findFirstIdentifierFromMemberExpression, isContainJSXElement, codeFrameError } from './utils'
 import * as t from 'babel-types'
-import { DEFAULT_Component_SET, INTERNAL_SAFE_GET, TARO_PACKAGE_NAME, REDUX_PACKAGE_NAME, IMAGE_COMPONENTS, INTERNAL_INLINE_STYLE, THIRD_PARTY_COMPONENTS, INTERNAL_GET_ORIGNAL, setLoopOriginal } from './constant'
+import { DEFAULT_Component_SET, INTERNAL_SAFE_GET, TARO_PACKAGE_NAME, REDUX_PACKAGE_NAME, MOBX_PACKAGE_NAME, IMAGE_COMPONENTS, INTERNAL_INLINE_STYLE, THIRD_PARTY_COMPONENTS, INTERNAL_GET_ORIGNAL, setLoopOriginal } from './constant'
 import { Adapters, setAdapter, Adapter } from './adapter'
 import { Options, setTransformOptions } from './options'
 const template = require('babel-template')
@@ -153,8 +153,7 @@ export default function transform (options: Options): TransformResult {
       noEmitHelpers: true
     })
     : options.code
-  options.env = Object.assign({ TARO_ENV: options.adapter || 'weapp' }, options.env || {})
-  const taroEnv = options.env.TARO_ENV
+  options.env = Object.assign({ 'process.env.TARO_ENV': options.adapter || 'weapp' }, options.env || {})
   setting.sourceCode = code
   // babel-traverse 无法生成 Hub
   // 导致 Path#getSource|buildCodeFrameError 都无法直接使用
@@ -179,9 +178,7 @@ export default function transform (options: Options): TransformResult {
     },
     plugins: [
       require('babel-plugin-transform-flow-strip-types'),
-      [require('babel-plugin-transform-define').default, {
-        'process.env.TARO_ENV': taroEnv
-      }]
+      [require('babel-plugin-transform-define').default, options.env]
     ].concat((process.env.NODE_ENV === 'test') ? [] : require('babel-plugin-remove-dead-code').default)
   }).ast as t.File
   if (options.isNormal) {
@@ -431,7 +428,7 @@ export default function transform (options: Options): TransformResult {
         )
       }
       if (
-        source === REDUX_PACKAGE_NAME
+        source === REDUX_PACKAGE_NAME || source === MOBX_PACKAGE_NAME
       ) {
         path.node.specifiers.forEach((s, index, specs) => {
           if (s.local.name === 'Provider') {
@@ -501,7 +498,9 @@ export default function transform (options: Options): TransformResult {
   result = new Transformer(mainClass, options.sourcePath, componentProperies).result
   result.code = generate(ast).code
   result.ast = ast
-  result.template = prettyPrint(result.template)
+  result.template = prettyPrint(result.template, {
+    max_char: 0
+  })
   result.imageSrcs = Array.from(imageSource)
   return result
 }

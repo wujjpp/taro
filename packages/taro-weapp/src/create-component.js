@@ -7,7 +7,7 @@ const componentFnReg = /^__fn_/
 const routerParamsPrivateKey = '__key_'
 const preloadPrivateKey = '__preload_'
 const preloadInitedComponent = '$preloadComponent'
-const pageExtraFns = ['onPullDownRefresh', 'onReachBottom', 'onShareAppMessage', 'onPageScroll', 'onTabItemTap']
+const pageExtraFns = ['onPullDownRefresh', 'onReachBottom', 'onShareAppMessage', 'onPageScroll', 'onTabItemTap', 'onResize']
 
 function bindProperties (weappComponentConf, ComponentClass, isPage) {
   weappComponentConf.properties = ComponentClass.properties || {}
@@ -63,6 +63,17 @@ function bindBehaviors (weappComponentConf, ComponentClass) {
 function bindStaticOptions (weappComponentConf, ComponentClass) {
   if (ComponentClass.options) {
     weappComponentConf.options = ComponentClass.options
+  }
+}
+
+function bindMultipleSlots (weappComponentConf, ComponentClass) {
+  const multipleSlots = ComponentClass.multipleSlots
+  if (!multipleSlots) {
+    return
+  }
+  weappComponentConf.options = {
+    ...weappComponentConf.options,
+    ...{ multipleSlots }
   }
 }
 
@@ -160,7 +171,7 @@ function processEvent (eventHandlerName, obj) {
       }
       realArgs = [_scope, ...datasetArgs, ...detailArgs, event]
     }
-    scope[eventHandlerName].apply(callScope, realArgs)
+    return scope[eventHandlerName].apply(callScope, realArgs)
   }
 }
 
@@ -220,7 +231,7 @@ export function componentTrigger (component, key, args) {
         let target
         if (ref.type === 'component') {
           target = component.$scope.selectComponent(`#${ref.id}`)
-          target = target.$component || target
+          target = target ? (target.$component || target) : null
         } else {
           const query = wx.createSelectorQuery().in(component.$scope)
           target = query.select(`#${ref.id}`)
@@ -285,7 +296,11 @@ function createComponent (ComponentClass, isPage) {
   try {
     componentInstance.state = componentInstance._createData() || componentInstance.state
   } catch (err) {
-    console.warn(`[Taro warn] 请给组件提供一个 \`defaultProps\` 以提高初次渲染性能！`)
+    if (isPage) {
+      console.warn(`[Taro warn] 请给页面提供初始 \`state\` 以提高初次渲染性能！`)
+    } else {
+      console.warn(`[Taro warn] 请给组件提供一个 \`defaultProps\` 以提高初次渲染性能！`)
+    }
     console.warn(err)
   }
   initData = Object.assign({}, initData, componentInstance.props, componentInstance.state)
@@ -365,11 +380,26 @@ function createComponent (ComponentClass, isPage) {
       }
     })
     __wxRoute && cacheDataSet(__wxRoute, ComponentClass)
+  } else {
+    weappComponentConf.pageLifetimes = weappComponentConf.pageLifetimes ||  {}
+
+    weappComponentConf.pageLifetimes['show'] = function () {
+      componentTrigger(this.$component, 'componentDidShow')
+    }
+
+    weappComponentConf.pageLifetimes['hide'] = function () {
+      componentTrigger(this.$component, 'componentDidShow')
+    }
+
+    weappComponentConf.pageLifetimes['resize'] = function () {
+      componentTrigger(this.$component, 'onResize')
+    }
   }
   bindProperties(weappComponentConf, ComponentClass, isPage)
   bindBehaviors(weappComponentConf, ComponentClass)
   bindStaticFns(weappComponentConf, ComponentClass)
   bindStaticOptions(weappComponentConf, ComponentClass)
+  bindMultipleSlots(weappComponentConf, ComponentClass)
   ComponentClass['$$events'] && bindEvents(weappComponentConf, ComponentClass['$$events'], isPage)
   if (ComponentClass['externalClasses'] && ComponentClass['externalClasses'].length) {
     weappComponentConf['externalClasses'] = ComponentClass['externalClasses']
